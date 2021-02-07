@@ -1,4 +1,8 @@
+#include "binary_utils.h"
+#include "logger.h"
+
 #include <LIEF/LIEF.hpp>
+#include <Windows.h>
 #include <algorithm>
 #include <chrono>
 #include <codecvt>
@@ -12,7 +16,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <windows.h>
 
 using namespace LIEF;
 using namespace std::chrono_literals;
@@ -23,21 +26,11 @@ extern "C" __declspec(dllexport) int Moo(void)
     return 0;
 }
 
-template<typename... Args>
-std::string format(const std::string& format_str, Args... args)
-{
-    size_t size = snprintf(nullptr, 0, format_str.c_str(), args...) + 1;
-    std::string out(size, '\0');
-    snprintf(out.data(), size, format_str.c_str(), args...);
-    return {out.c_str()};
-}
+std::vector<std::string> kBlacklist = {"SspiCli.dll", "cfgmgr32.dll", "WindowsCodecs.dll", "kernel.appcore.dll", "VCRUNTIME140.dll"};
 
-template<typename... Args>
-void Log(const std::string& format_str, Args... args)
+bool IsInBlacklist(const std::string& filename)
 {
-    std::ofstream file;
-    file.open("log.txt", std::ios_base::app);
-    file << format(format_str, std::forward<Args>(args)...) << std::endl;
+    return std::find(kBlacklist.begin(), kBlacklist.end(), filename) != kBlacklist.end();
 }
 
 std::vector<fs::path> GetModules()
@@ -75,6 +68,15 @@ std::vector<fs::path> GetModules()
     return modules;
 }
 
+void YieldThread(std::chrono::microseconds us)
+{
+    auto start = std::chrono::high_resolution_clock::now();
+    auto end   = start + us;
+    do
+    {
+        std::this_thread::yield();
+    } while (std::chrono::high_resolution_clock::now() < end);
+}
 
 void ScanAllModule()
 {
@@ -83,59 +85,93 @@ void ScanAllModule()
     Log("Number of modules found: %d", modules.size());
     for (auto& module : modules)
     {
-        try
+        std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+        std::string module_path     = converter.to_bytes(module.c_str());
+        std::string module_filename = converter.to_bytes(module.filename().c_str());
+
+        if (IsInBlacklist(module_filename))
+            continue;
+
+        Log("Scanning %s...\n", module_filename.c_str());
+
+        auto dll_obj = DllObject::LoadFromFile(module_path);
+        auto pe      = dll_obj->Get();
+        for (auto& section : pe->sections())
         {
-            std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-            std::string module_path     = converter.to_bytes(module.c_str());
-            std::string module_filename = converter.to_bytes(module.filename().c_str());
+            bool is_executable = section.has_characteristic(LIEF::PE::SECTION_CHARACTERISTICS::IMAGE_SCN_MEM_EXECUTE);
+            bool is_writable   = section.has_characteristic(LIEF::PE::SECTION_CHARACTERISTICS::IMAGE_SCN_MEM_WRITE);
 
-            Log("Scanning %s", module_filename.c_str());
-
-            auto pe = LIEF::PE::Parser::parse(module_path);
-            for (auto& section : pe->sections())
+            if (is_executable && !is_writable)
             {
-                bool is_executable = section.has_characteristic(LIEF::PE::SECTION_CHARACTERISTICS::IMAGE_SCN_MEM_EXECUTE);
-                bool is_writable   = section.has_characteristic(LIEF::PE::SECTION_CHARACTERISTICS::IMAGE_SCN_MEM_WRITE);
+                auto file_content = section.content();
+                auto va           = section.virtual_address();
 
-                if (is_executable && !is_writable)
+                uintptr_t base_address    = dll_obj->GetBaseAddress();
+                const uint8_t* section_va = reinterpret_cast<uint8_t*>(base_address + section.virtual_address());
+
+                for (size_t i = 0; i < std::min((uint64_t)section.virtual_size(), section.size()); i++)
                 {
-                    auto file_content = section.content();
-                    auto va           = section.virtual_address();
-
-                    uintptr_t base_addr       = (uintptr_t)GetModuleHandleW(module.filename().c_str());
-                    const uint8_t* section_va = reinterpret_cast<uint8_t*>(base_addr + section.virtual_address());
-
-                    for (size_t i = 0; i < std::min((uint64_t)section.virtual_size(), section.size()); i++)
+                    if (section_va[i] != file_content[i])
                     {
-                        if (section_va[i] != file_content[i])
-                        {
-                            Log("Byte differs at %s+%p (orig: %#x != %#x)",
-                                module_filename.c_str(),
-                                (uintptr_t)(&section_va[i] - base_addr),
-                                file_content[i],
-                                section_va[i]);
-                        }
+                        auto export_name = dll_obj->GetExportNameFromAddress((uintptr_t)&section_va[i]);
+                        Log("Byte at %s+%p [Export name: %s] differs (orig: %#x != %#x)",
+                            module_filename.c_str(),
+                            dll_obj->VaToRva((uintptr_t)&section_va[i]),
+                            export_name.c_str(),
+                            file_content[i],
+                            section_va[i]);
+                    }
+                    if (i % 0x10000 == 0)
+                    {
+                        // Yield thread every 0x10 pages
+                        YieldThread(std::chrono::microseconds(10000));
                     }
                 }
             }
-        }
-        catch (const LIEF::exception& err)
-        {
-            std::cerr << err.what() << std::endl;
         }
     }
     Log("End of scan...");
 }
 
+DWORD WINAPI ScanThread(LPVOID lp_param)
+{
+    ScanAllModule();
+
+    return 1;
+}
+
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
 {
-    // Perform actions based on the reason for calling.
+    DWORD thread_id;
     switch (fdwReason)
     {
         case DLL_PROCESS_ATTACH:
-            MessageBoxA(NULL, "DLL Injection successful!", "DLL Injection", MB_ICONEXCLAMATION);
-            ScanAllModule();
+            CreateThread(NULL, 0, ScanThread, NULL, 0, &thread_id);
             break;
     }
     return TRUE; // Successful DLL_PROCESS_ATTACH.
+}
+
+int main()
+{
+    auto handle = GetModuleHandle("kernel32.dll");
+    if (handle == nullptr)
+        return -1;
+
+    auto address = GetProcAddress(handle, "IsDebuggerPresent");
+    if (address == nullptr)
+        return -1;
+
+
+    std::cout << "Export found" << std::endl;
+
+    DWORD old_prot;
+    if (!VirtualProtect(address, 0x1, PAGE_EXECUTE_READWRITE, &old_prot))
+        return -1;
+
+    memcpy(address, "\x33\xc0\xc3", 3);
+    DWORD saved_prot = old_prot;
+    VirtualProtect(address, 0x1, saved_prot, &old_prot);
+
+    ScanAllModule();
 }
