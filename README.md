@@ -2,12 +2,13 @@
 
 ## Description
 
-Find hooks is a small tool that compares executable memory to files on disk to find hooks.
+Find hooks is a small tool that compares executable memory to files on disk to detect hooks.
 
 ## TODO
 
-- [ ] Don't scan relocs
-- [ ] Why does R6S closes on specific libs?
+- [ ] Support reloc scanning (compute relocation before check)
+- [ ] Support IAT scanning (Resolve imports before check)
+- [ ] Why does R6S closes on specific libs? (Files currently in the blacklist)
 
 ## Compilation
 

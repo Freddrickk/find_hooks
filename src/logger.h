@@ -1,9 +1,13 @@
 #ifndef _LOGGER_H_
 #define _LOGGER_H_
 
+#include "time.h"
+
 #include <cstdlib>
 #include <fstream>
 #include <string>
+
+std::string GetLogfileName();
 
 template<typename... Args>
 std::string format(const std::string& format_str, Args... args)
@@ -18,7 +22,7 @@ template<typename... Args>
 void Log(const std::string& format_str, Args... args)
 {
     std::ofstream file;
-    file.open("log.txt", std::ios_base::app);
+    file.open(GetLogfileName(), std::ios_base::app);
     file << format(format_str, std::forward<Args>(args)...) << std::endl;
 }
 

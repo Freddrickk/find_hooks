@@ -6,7 +6,7 @@ project(hook_scanner)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 file(GLOB_RECURSE SRC_CPP RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "src/*.cpp")
-add_library(hook_scanner SHARED ${SRC_CPP})
+add_library(hook_scanner SHARED ${SRC_CPP} )
 #add_executable(hook_scanner ${SRC_CPP})
 
 set_property(TARGET hook_scanner PROPERTY CXX_STANDARD           17)

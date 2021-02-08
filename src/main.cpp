@@ -26,7 +26,15 @@ extern "C" __declspec(dllexport) int Moo(void)
     return 0;
 }
 
-std::vector<std::string> kBlacklist = {"SspiCli.dll", "cfgmgr32.dll", "WindowsCodecs.dll", "kernel.appcore.dll", "VCRUNTIME140.dll"};
+std::vector<std::string> kBlacklist = {"SspiCli.dll",
+                                       "cfgmgr32.dll",
+                                       "WindowsCodecs.dll",
+                                       "kernel.appcore.dll",
+                                       "VCRUNTIME140.dll",
+                                       "Wldp.dll",
+                                       "MSASN1.dll",
+                                       "amdihk64.dll",
+                                       "WINNSI.DLL"};
 
 bool IsInBlacklist(const std::string& filename)
 {
@@ -92,7 +100,7 @@ void ScanAllModule()
         if (IsInBlacklist(module_filename))
             continue;
 
-        Log("Scanning %s...\n", module_filename.c_str());
+        Log("Scanning %s @ %s...\n", module_filename.c_str(), module_path.c_str());
 
         auto dll_obj = DllObject::LoadFromFile(module_path);
         auto pe      = dll_obj->Get();
@@ -106,26 +114,34 @@ void ScanAllModule()
                 auto file_content = section.content();
                 auto va           = section.virtual_address();
 
-                uintptr_t base_address    = dll_obj->GetBaseAddress();
-                const uint8_t* section_va = reinterpret_cast<uint8_t*>(base_address + section.virtual_address());
+                uintptr_t base_address     = dll_obj->GetBaseAddress();
+                const uint8_t* section_ptr = reinterpret_cast<uint8_t*>(base_address + section.virtual_address());
 
                 for (size_t i = 0; i < std::min((uint64_t)section.virtual_size(), section.size()); i++)
                 {
-                    if (section_va[i] != file_content[i])
+                    uintptr_t cur_addr = (uintptr_t)section_ptr;
+
+                    // The address should not be modifier by the linker to be checked against the DLL on disk.
+                    if (!dll_obj->IsAddressModifiedByLinker(cur_addr))
                     {
-                        auto export_name = dll_obj->GetExportNameFromAddress((uintptr_t)&section_va[i]);
-                        Log("Byte at %s+%p [Export name: %s] differs (orig: %#x != %#x)",
-                            module_filename.c_str(),
-                            dll_obj->VaToRva((uintptr_t)&section_va[i]),
-                            export_name.c_str(),
-                            file_content[i],
-                            section_va[i]);
+                        if (*section_ptr != file_content[i])
+                        {
+                            auto export_name = dll_obj->GetExportNameFromAddress(cur_addr);
+                            Log("Byte at %s+%p [Export name: %s] differs (orig: %#x != %#x)",
+                                module_filename.c_str(),
+                                dll_obj->VaToRva(cur_addr),
+                                export_name.c_str(),
+                                file_content[i],
+                                *section_ptr);
+                        }
                     }
+
                     if (i % 0x10000 == 0)
                     {
                         // Yield thread every 0x10 pages
                         YieldThread(std::chrono::microseconds(10000));
                     }
+                    section_ptr++;
                 }
             }
         }
@@ -146,6 +162,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
     switch (fdwReason)
     {
         case DLL_PROCESS_ATTACH:
+            // ScanAllModule();
             CreateThread(NULL, 0, ScanThread, NULL, 0, &thread_id);
             break;
     }
