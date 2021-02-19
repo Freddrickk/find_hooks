@@ -111,37 +111,52 @@ void ScanAllModule()
 
             if (is_executable && !is_writable)
             {
-                auto file_content = section.content();
-                auto va           = section.virtual_address();
+                auto section_offset              = section.virtual_address();
+                auto section_vector              = section.content();
+                const size_t section_size        = section_vector.size();
+                const uintptr_t module_base_addr = dll_obj->GetBaseAddress();
 
-                uintptr_t base_address     = dll_obj->GetBaseAddress();
-                const uint8_t* section_ptr = reinterpret_cast<uint8_t*>(base_address + section.virtual_address());
+                const uint64_t* mem_section_ptr  = reinterpret_cast<uint64_t*>(module_base_addr + section_offset);
+                const uint64_t* file_section_ptr = reinterpret_cast<uint64_t*>(&section_vector[0]);
 
-                for (size_t i = 0; i < std::min((uint64_t)section.virtual_size(), section.size()); i++)
+                for (size_t offset = 0; offset < section_size; offset += sizeof(*mem_section_ptr))
                 {
-                    uintptr_t cur_addr = (uintptr_t)section_ptr;
-
-                    // The address should not be modifier by the linker to be checked against the DLL on disk.
-                    if (!dll_obj->IsAddressModifiedByLinker(cur_addr))
+                    // Perform checks 64-bit at a time
+                    if (*mem_section_ptr != *file_section_ptr)
                     {
-                        if (*section_ptr != file_content[i])
+                        // Check the diff byte by byte
+                        const uint8_t* mem_section  = reinterpret_cast<const uint8_t*>(mem_section_ptr);
+                        const uint8_t* file_section = reinterpret_cast<const uint8_t*>(file_section_ptr);
+
+                        const size_t nb_bytes_to_check = std::min(section_size - offset, sizeof(*mem_section_ptr));
+
+                        for (size_t i = 0; i < nb_bytes_to_check; i++)
                         {
-                            auto export_name = dll_obj->GetExportNameFromAddress(cur_addr);
-                            Log("Byte at %s+%p [Export name: %s] differs (orig: %#x != %#x)",
-                                module_filename.c_str(),
-                                dll_obj->VaToRva(cur_addr),
-                                export_name.c_str(),
-                                file_content[i],
-                                *section_ptr);
+                            uintptr_t cur_addr = (uintptr_t)&mem_section[i];
+                            // Check if this address was modified by the loader
+                            if (!dll_obj->IsAddressModifiedByLoader(cur_addr))
+                            {
+                                if (mem_section[i] != file_section[i])
+                                {
+                                    auto export_name = dll_obj->GetExportNameFromAddress(cur_addr);
+                                    Log("Byte at %s+%p [Export name: %s] differs (orig: %#x != %#x)",
+                                        module_filename.c_str(),
+                                        dll_obj->VaToRva(cur_addr),
+                                        export_name.c_str(),
+                                        file_section[i],
+                                        mem_section[i]);
+                                }
+                            }
                         }
                     }
 
-                    if (i % 0x10000 == 0)
+                    if (offset % 0x10000 == 0)
                     {
                         // Yield thread every 0x10 pages
                         YieldThread(std::chrono::microseconds(10000));
                     }
-                    section_ptr++;
+                    mem_section_ptr++;
+                    file_section_ptr++;
                 }
             }
         }
@@ -162,8 +177,8 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
     switch (fdwReason)
     {
         case DLL_PROCESS_ATTACH:
-            // ScanAllModule();
-            CreateThread(NULL, 0, ScanThread, NULL, 0, &thread_id);
+            ScanAllModule();
+            // CreateThread(NULL, 0, ScanThread, NULL, 0, &thread_id);
             break;
     }
     return TRUE; // Successful DLL_PROCESS_ATTACH.

@@ -12,7 +12,7 @@ add_library(hook_scanner SHARED ${SRC_CPP} )
 set_property(TARGET hook_scanner PROPERTY CXX_STANDARD           17)
 set_property(TARGET hook_scanner PROPERTY CXX_STANDARD_REQUIRED  ON)
 
-target_include_directories(hook_scanner PRIVATE "src/")
+target_include_directories(hook_scanner PRIVATE "src")
 
 add_subdirectory("external/LIEF" EXCLUDE_FROM_ALL)
 

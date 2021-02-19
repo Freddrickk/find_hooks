@@ -17,7 +17,7 @@ public:
 
     bool IsRelocatedMemory(uintptr_t address);
     bool IsAddressInIAT(uintptr_t address);
-    bool IsAddressModifiedByLinker(uintptr_t address);
+    bool IsAddressModifiedByLoader(uintptr_t address);
 
     void InitializeRelocationCache();
 

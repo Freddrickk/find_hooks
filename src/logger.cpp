@@ -1,5 +1,7 @@
 #include "logger.h"
 
+#pragma message("Logger.cpp was loaded")
+
 std::string GetLogfileName()
 {
     time_t rawtime;

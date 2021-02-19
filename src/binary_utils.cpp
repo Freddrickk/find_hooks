@@ -71,7 +71,7 @@ bool DllObject::IsAddressInIAT(uintptr_t address)
     return address >= beg && address < end;
 }
 
-bool DllObject::IsAddressModifiedByLinker(uintptr_t address)
+bool DllObject::IsAddressModifiedByLoader(uintptr_t address)
 {
     return IsAddressInIAT(address) || IsRelocatedMemory(address);
 }

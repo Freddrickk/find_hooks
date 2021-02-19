@@ -7,6 +7,8 @@
 #include <fstream>
 #include <string>
 
+#pragma message("Logger.h was loaded")
+
 std::string GetLogfileName();
 
 template<typename... Args>
